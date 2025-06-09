@@ -1,0 +1,24 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+    {
+      "type": "shell",
+      "label": "go: build package",
+      "command": "tinygo",
+      "args": [
+        "build",
+        "-opt=2",
+        "--no-debug",
+        "${file}"
+      ],
+      "problemMatcher": [
+        "$go"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "detail": "Compila il progetto TinyGo con ottimizzazione per la dimensione e senza debug."
+    }
+  ]
+}
