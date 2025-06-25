@@ -7,17 +7,20 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 )
 
 const (
-	baseDirName      = "GoChain"
-	blockchainDir    = "Blockchain"
-	blockchainLogDir = "BlockchainLog"
-	logFileName      = "chainLog.log"
-	binExtension     = ".bin"
-	expectedPrevFileLen  = 64
+	baseDirName           = "GoChain"
+	blockchainDir         = "Blockchain"
+	blockchainLogDir      = "BlockchainLog"
+	logFileName           = "chainLog.log"
+	binExtension          = ".bin"
+	expectedFileLenNoNext = 128 //length of file without the next hash file in file name
+	fileHashLength        = 64
+	pollingInterval       = time.Second // Intervallo di polling: controlla ogni secondo
 )
 
 //DA CREARE UN PUNTO DI INGRESSE PER I FUTURI AGGIORNAMENTI DELLA VM
@@ -35,6 +38,7 @@ func main() {
 	//close log file at the end of function
 	defer logFile.Close()
 
+	//CON GO STANDARD POSSO USARE IL WATCHER
 	//setup watcher and get it. If function returns the watcher exists
 	dirWatcher := setupWatcher()
 	// close watcher dir at the end of function
@@ -43,6 +47,8 @@ func main() {
 	//setup directory to watch
 	dirToWatch := ""
 	setupDirToWatch(baseDir, &dirToWatch, dirWatcher)
+	// setupDirToWatch(baseDir, &dirToWatch) //NON USIAMO IL WATCHER MA IL POLLING PER ORA
+	log.Printf("dir to watch: " + dirToWatch)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -52,6 +58,12 @@ func main() {
 		log.Printf("Cycle to monitor directory")
 		defer wg.Done()
 		for {
+			// function to polling process directory's files ù
+			// MA CON GO STANDARD POSSO USARE IL WATCHER
+			// processFilesInDirectory(dirToWatch)
+			// time.Sleep(pollingInterval)
+
+			//CON GO STANDARD POSSO USARE IL WATCHER
 			select {
 			case err, ok := <-dirWatcher.Errors:
 				if !ok {
@@ -73,8 +85,9 @@ func main() {
 	//block program until done will be closed
 	<-done
 
+	//PER ORA NON USIAMO IL WATCHER MA IL POLLING
 	// close dirWatcher to let go routine exit for cycle of watcher events
-	dirWatcher.Close()
+	// dirWatcher.Close()
 
 	//wait for go routine end
 	wg.Wait()
@@ -95,7 +108,7 @@ func getBaseDir() string {
 	}
 }
 
-//Create log file setting up flags and returns its pointer
+// Create log file setting up flags and returns its pointer
 func setupLogging(baseDir string) *os.File {
 	var logDir string
 	var logFilePath string
@@ -129,14 +142,15 @@ func setupLogging(baseDir string) *os.File {
 		break
 	}
 	if err != nil || logFilePath == "" {
-		log.Panic("Cannot create log file: "+ logFilePath);
+		log.Panic("Cannot create log file: " + logFilePath)
 	}
 
 	return logFile
 }
 
-//Create watcher and returns its pointer
-func setupWatcher() *fsnotify.Watcher{
+// CON GO STANDARD POSSO USARE IL WATCHER
+// Create watcher and returns its pointer
+func setupWatcher() *fsnotify.Watcher {
 	var dirWatcher *fsnotify.Watcher
 	var err error
 
@@ -154,8 +168,9 @@ func setupWatcher() *fsnotify.Watcher{
 	return dirWatcher
 }
 
-//setup directory to watch adding it to watcher
-func setupDirToWatch(baseDir string, dirToWatch *string, watcher *fsnotify.Watcher) {
+// setup directory to watch adding it to watcher
+func setupDirToWatch(baseDir string, dirToWatch *string, watcher *fsnotify.Watcher) { // CON GO STANDARD POSSO USARE IL WATCHER
+	// func setupDirToWatch(baseDir string, dirToWatch *string) { //non usiamo il watcher ma il polling per ora
 	var err error
 
 	for i := 0; i < 3; i++ {
@@ -173,7 +188,8 @@ func setupDirToWatch(baseDir string, dirToWatch *string, watcher *fsnotify.Watch
 		log.Panic("Dir to watch cannot be initialized: " + err.Error())
 	}
 
-	//add directory to watcher, try 3 times
+	//CON GO STANDARD POSSO USARE IL WATCHER
+	// add directory to watcher, try 3 times
 	for i := 0; i < 3; i++ {
 		err = watcher.Add(*dirToWatch)
 		if err != nil {
@@ -185,72 +201,103 @@ func setupDirToWatch(baseDir string, dirToWatch *string, watcher *fsnotify.Watch
 	}
 }
 
-//manage watcher's event
+// //CON GO STANDARD POSSO USARE IL WATCHER
+// manage watcher's event
 func processWatcherEvent(event fsnotify.Event, dirToWatch string) {
-				log.Printf("Event from watcher: %s, Op: %s", event.Name, event.Op.String())
+	log.Printf("Event from watcher: %s, Op: %s", event.Name, event.Op.String())
 
-				//new file is created
-				if event.Op&fsnotify.Create == fsnotify.Create {
-					log.Printf("Find new file: %s", event.Name)
-				}
+	//new file is created
+	if event.Op&fsnotify.Create == fsnotify.Create {
+		log.Printf("Find new file: %s", event.Name)
+	}
 
-				//a file is written
-				if event.Op&fsnotify.Write == fsnotify.Write {
-					log.Printf("Wrote new file: %s", event.Name)
+	//a file is written
+	if event.Op&fsnotify.Write == fsnotify.Write {
+		log.Printf("Wrote new file: %s", event.Name)
 
-					extFile := filepath.Ext(event.Name)
-					if extFile != binExtension {
-						log.Printf("File extension is not .bin")
-						return
-					}
+		manageFileRenaming(event.Name, dirToWatch)
 
-					//first 64 chars of event.Name are the hash of previous transaction that is the file I am looking for
-					eventName := strings.TrimSuffix(event.Name, extFile)
-					if len(eventName) != expectedPrevFileLen  {
-						log.Printf("File name not in correct format")
-						return
-					}
-
-					var fileNameToUpdate string
-					//the file's name of event cannot be prefix by O- cause O- is the prefix ONLY for Genesys block that is the start of all vm
-					prevHashFile := eventName[0:expectedPrevFileLen]
-					hashFile := eventName[len(eventName)-expectedPrevFileLen:]
-
-					//Look for the file whose name is composed only by prevHash + fileHash or by O-fileHash that indicates the last transaction
-					files, err := os.ReadDir(dirToWatch)
-					if err != nil {
-						log.Printf("Error on read transacionts' directory: %v", err)
-					} else {
-						for _, f := range files {
-
-							//ignore dir and file not .bin
-							if f.IsDir() || filepath.Ext(f.Name()) != binExtension {
-								continue
-							}
-
-							//get file name without extension
-							name := strings.TrimSuffix(f.Name(), filepath.Ext(f.Name()))
-
-							if(len(name) > expectedPrevFileLen){
-								if (len(name) >= 128 && name[expectedPrevFileLen:expectedPrevFileLen] == prevHashFile) || (len(name) == 66 && name == "O-"+prevHashFile) {
-									// 192 hex chars is transaction block with another block next
-									// 128 hex chars is transaction block without another block next
-									// 66 hex chars pre-pended by "O-" is genesys block without another block next
-									fileNameToUpdate = name
-									break
-								}
-							}
-						}
-					}
-
-					if fileNameToUpdate == "" {
-						log.Printf("File to update not found, hash: %s", prevHashFile)
-					}
-					err = os.Rename(filepath.Join(dirToWatch, fileNameToUpdate+".bin"), filepath.Join(dirToWatch, fileNameToUpdate+hashFile+".bin"))
-					if err != nil {
-						log.Printf("Error on file renaming: %s", fileNameToUpdate+".bin")
-					}
-
-					//TESTARE SE è PRESENTE UN FILE .wasm DEL NUOVO FILE CREATO
-				}
+		//TESTARE SE è PRESENTE UN FILE .wasm DEL NUOVO FILE CREATO
+	}
 }
+
+// This function accept the new file name as parameter and cycling files in dirToWatch looks for the previous file thanks to hash of prev file in the first 64 bytes of new file name
+func manageFileRenaming(filePath string, dirToWatch string) {
+	fileFullName := filepath.Base(filePath)
+	extFile := filepath.Ext(fileFullName)
+
+	// Considera solo i file con estensione .bin
+	if extFile != binExtension {
+		return
+	}
+
+	//first 64 chars of fileName are the hash of previous transaction that is the file I am looking for
+	fileName := strings.TrimSuffix(filepath.Base(fileFullName), extFile)
+	if len(fileName) < fileHashLength {
+		log.Printf("File name not in correct format")
+		return
+	}
+
+	log.Printf("New file found: %s", fileFullName)
+
+	var fileNameToUpdate string
+	//the file's name of event cannot be prefix by O- cause O- is the prefix ONLY for Genesys block that is the start of all vm
+	prevHashFile := fileName[0:fileHashLength]
+	hashFile := fileName[len(fileName)-fileHashLength:]
+
+	//Look for the file whose name is composed only by prevHash + fileHash or by O-fileHash that indicates the last transaction
+	files, err := os.ReadDir(dirToWatch)
+	if err != nil {
+		log.Printf("Error on read transacionts' directory: %v", err)
+	} else {
+		for _, f := range files {
+
+			//ignore dir and file not .bin
+			if f.IsDir() || filepath.Ext(f.Name()) != binExtension {
+				continue
+			}
+
+			//get file name without extension
+			name := strings.TrimSuffix(f.Name(), filepath.Ext(f.Name()))
+
+			//the length of previous file name must be of 128 bytes because it doesn't have the next file hash yet
+			if len(name) > fileHashLength {
+				if (len(name) == expectedFileLenNoNext && name[fileHashLength:len(name)] == prevHashFile) || (len(name) == 66 && name == "O-"+prevHashFile) {
+					// 192 hex chars is transaction block with another block next
+					// 128 hex chars is transaction block without another block next
+					// 66 hex chars pre-pended by "O-" is genesys block without another block next
+					fileNameToUpdate = name
+					break
+				}
+			}
+		}
+	}
+
+	if fileNameToUpdate == "" {
+		log.Printf("File to update not found, hash: %s", prevHashFile)
+	}
+	err = os.Rename(filepath.Join(dirToWatch, fileNameToUpdate+".bin"), filepath.Join(dirToWatch, fileNameToUpdate+hashFile+".bin"))
+	if err != nil {
+		log.Printf("Error on file renaming: %s", fileNameToUpdate+".bin")
+	}
+}
+
+//FUNZIONE PER POLLING, MI FA UN PO' SCHIFO MA PER ORA NON USIAMO IL WATCHER PERCHè TINYGO NON LO SUPPORTA
+// processFilesInDirectory scansiona la directory e chiama processFileLogic per i file pertinenti.
+// func processFilesInDirectory(dirToWatch string) {
+// 	// log.Printf("Scanning directory: %s\r\n", dirToWatch) // Commentato per ridurre il log verboso
+
+// 	files, err := os.ReadDir(dirToWatch)
+// 	if err != nil {
+// 		log.Panicf("Error reading directory %s: %v\r\n", dirToWatch, err)
+// 		return
+// 	}
+
+// 	for _, f := range files {
+// 		if f.IsDir() {
+// 			continue
+// 		}
+
+// 		manageFileRenaming(f.Name(), dirToWatch);
+// 	}
+// }

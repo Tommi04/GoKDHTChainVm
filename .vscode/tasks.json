@@ -3,22 +3,44 @@
 	"tasks": [
     {
       "type": "shell",
-      "label": "go: build package",
+      "label": "tinygo build",
       "command": "tinygo",
       "args": [
         "build",
         "-opt=2",
         "--no-debug",
+        "-o",
+        "tinygoVmChain.exe",
+        "${file}"
+      ],
+      "options": {
+          // Set environment variables for this task
+          "env": {
+              "GOOS": "windows",
+              "GOARCH": "amd64",
+          }
+      },
+      "problemMatcher": [
+        "$go"
+      ],
+      "detail": "Compila il progetto TinyGo con ottimizzazione per la dimensione e senza debug."
+    },
+    {
+      "type": "shell",
+      "label": "go build",
+      "command": "go",
+      "args": [
+        "build",
+        "--ldflags",
+        "-s -w",
+        "-o",
+        "goVmChain.exe",
         "${file}"
       ],
       "problemMatcher": [
         "$go"
       ],
-      "group": {
-        "kind": "build",
-        "isDefault": true
-      },
-      "detail": "Compila il progetto TinyGo con ottimizzazione per la dimensione e senza debug."
+      "detail": "Compila il progetto go con ottimizzazione per la dimensione."
     }
   ]
 }
